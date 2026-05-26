@@ -2,7 +2,7 @@
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that
 routes `web_search` and `web_extract` tool calls through a
-[9router](https://9router.ai) gateway instead of the bundled
+[9router](https://9router.com) gateway instead of the bundled
 Firecrawl / Tavily / Exa / etc. backends.
 
 Implements `agent.web_search_provider.WebSearchProvider`:
