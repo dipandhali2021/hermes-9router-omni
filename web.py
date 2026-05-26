@@ -14,57 +14,16 @@ Env vars (both required):
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict, List
 
 from agent.web_search_provider import WebSearchProvider
+
+from ._http import is_configured, post_json as _post_json
 
 logger = logging.getLogger(__name__)
 
 SEARCH_MODEL = "openclaw-search"
 FETCH_MODEL = "openclaw-fetch"
-REQUEST_TIMEOUT_S = 60
-
-
-def _base_url() -> str:
-    raw = os.getenv("NINEROUTER_BASE_URL", "").strip()
-    if not raw:
-        raise ValueError(
-            "NINEROUTER_BASE_URL environment variable not set. "
-            "Set it to your 9router gateway URL (e.g. http://127.0.0.1:20128)."
-        )
-    return raw.rstrip("/")
-
-
-def _api_key() -> str:
-    key = os.getenv("NINEROUTER_API_KEY", "").strip()
-    if not key:
-        raise ValueError(
-            "NINEROUTER_API_KEY environment variable not set. "
-            "Set it to your 9router bearer token."
-        )
-    return key
-
-
-def _post_json(path: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    import httpx
-
-    url = f"{_base_url()}{path}"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {_api_key()}",
-    }
-    logger.info("9router POST %s", url)
-    response = httpx.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT_S)
-    if response.status_code >= 400:
-        preview = response.text[:200].replace("\n", " ")
-        raise RuntimeError(
-            f"9router {path} failed: {response.status_code} {response.reason_phrase} :: {preview}"
-        )
-    try:
-        return response.json()
-    except ValueError:
-        return {"_raw": response.text}
 
 
 def _normalize_search(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -129,10 +88,7 @@ class NineRouterWebSearchProvider(WebSearchProvider):
         return "9router"
 
     def is_available(self) -> bool:
-        return bool(
-            os.getenv("NINEROUTER_API_KEY", "").strip()
-            and os.getenv("NINEROUTER_BASE_URL", "").strip()
-        )
+        return is_configured()
 
     def supports_search(self) -> bool:
         return True

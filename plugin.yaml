@@ -1,9 +1,12 @@
-name: web-9router
-version: 1.0.0
-description: "Route web_search and web_extract through a self-hosted 9router gateway."
+name: 9router-omni
+version: 2.0.0
+description: "Route web search, web extract, image generation, TTS, and STT through a 9router gateway."
 author: dipandhali2021
 kind: backend
 provides_web_providers:
   - 9router
+provides_image_gen_providers:
+  - 9router
 requires_env:
+  - NINEROUTER_BASE_URL
   - NINEROUTER_API_KEY

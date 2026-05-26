@@ -1,106 +1,148 @@
-# hermes-web-9router
+# hermes-9router-omni
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that
-routes `web_search` and `web_extract` tool calls through a
-[9router](https://9router.com) gateway instead of the bundled
-Firecrawl / Tavily / Exa / etc. backends.
+routes Hermes' built-in **web search**, **web extract**, **image generation**,
+**TTS**, and **STT** tool calls through a single
+[9router](https://9router.com) gateway. One install, one set of credentials,
+all five capabilities wired up.
 
-Implements `agent.web_search_provider.WebSearchProvider`:
-
-| Tool          | Endpoint                       | Method |
-|---------------|--------------------------------|--------|
-| `web_search`  | `{BASE_URL}/v1/search`         | POST   |
-| `web_extract` | `{BASE_URL}/v1/web/fetch`      | POST   |
-
-`web_extract` loops over the supplied URLs (Hermes calls with up to 5 per
-invocation) and issues one fetch per URL, then returns the canonical Hermes
-extract shape so downstream tooling treats it identically to the built-ins.
+| Capability    | Hermes hook                                | 9router endpoint                                     |
+|---------------|--------------------------------------------|------------------------------------------------------|
+| `web_search`  | `ctx.register_web_search_provider`         | `POST /v1/search`                                    |
+| `web_extract` | `ctx.register_web_search_provider`         | `POST /v1/web/fetch` (one call per URL)              |
+| `image_generate` | `ctx.register_image_gen_provider`       | `POST /v1/images/generations`                        |
+| TTS           | monkey-patch `tools.tts_tool.text_to_speech_tool`        | `POST /v1/audio/speech`              |
+| STT           | monkey-patch `tools.transcription_tools.transcribe_audio` | `POST /v1/audio/transcriptions` (multipart)  |
 
 ## Install
 
 ```bash
-hermes plugins install dipandhali2021/hermes-web-9router
-hermes plugins enable web-9router
+hermes plugins install dipandhali2021/hermes-9router-omni
+hermes plugins enable 9router-omni
 ```
 
 Or clone manually:
 
 ```bash
-git clone https://github.com/dipandhali2021/hermes-web-9router \
-  ~/.hermes/plugins/web-9router
+git clone https://github.com/dipandhali2021/hermes-9router-omni \
+  ~/.hermes/plugins/9router-omni
 ```
 
 ## Configure
 
-Add to `~/.hermes/.env` (Hermes auto-loads this on every startup):
+Two env vars are **required**. Add to `~/.hermes/.env` (Hermes auto-loads it on
+every startup):
 
 ```ini
 NINEROUTER_BASE_URL=http://127.0.0.1:20128
 NINEROUTER_API_KEY=sk-your-9router-bearer-token
 ```
 
-Both are **required** — the plugin will not start without them. Point
-`NINEROUTER_BASE_URL` at a local 9router (`http://127.0.0.1:20128`) or a remote
-gateway, whichever you run.
-
-Then select `9router` as the web backend in `~/.hermes/config.yaml`:
+Then flip 9router on as the backend for each capability you want it to serve.
+Edit `~/.hermes/config.yaml`:
 
 ```yaml
 plugins:
   enabled:
-    - web-9router
+    - 9router-omni
 
+# Web search + extract
 web:
-  backend: "9router"          # shared selector for both search and extract
-  # or set per-capability:
-  # search_backend: "9router"
-  # extract_backend: "9router"
+  backend: "9router"          # or set search_backend / extract_backend separately
+
+# Image generation
+image_gen:
+  provider: "9router"
+  9router:
+    model: "gemini/gemini-3-pro-image-preview"   # optional; default shown
+    # quality: "high"                            # optional pass-through
+
+# TTS
+tts:
+  provider: "9router"
+  9router:
+    model: "gpt-4o-mini-tts"                     # optional; default shown
+
+# STT
+stt:
+  enabled: true
+  provider: "9router"
+  9router:
+    model: "openai/whisper-1"                    # optional; default shown
+    # language: "en"                             # optional ISO-639-1
+    # prompt: "Domain hint here"                 # optional transcription hint
+    # temperature: 0                             # optional 0..1
 ```
 
-Verify with:
+Cherry-pick whichever sections you want — you don't have to flip all four. Any
+capability whose `provider` / `backend` you leave unchanged keeps using its
+existing Hermes default.
+
+Verify:
 
 ```bash
-hermes plugins list | grep web-9router        # → enabled (user)
-hermes                                         # then ask: "search the web for ..."
+hermes plugins list | grep 9router-omni        # → enabled (user)
+hermes                                          # then ask the agent to:
+#   "search the web for ..."
+#   "generate an image of a sunset"
+#   /tts hello
+# or feed a voice clip via Telegram / Discord
 ```
 
-## Why a monkey-patch?
+## Why a monkey-patch for TTS and STT?
 
-Hermes' tool-registration layer (`tools/web_tools.py`) gates `web_search` /
-`web_extract` visibility on a hardcoded allowlist of the seven built-in
-backends — third-party `WebSearchProvider` subclasses are correctly
-discovered but invisible to the model. On registration this plugin patches
-`_is_backend_available` and `check_web_api_key` (and the captured `check_fn`
-on the `ToolEntry` objects already in the registry) so any registered
-provider that reports `is_available() == True` counts as available. The
-patch is idempotent and only widens the allowlist; built-in backends remain
-fully functional.
+Hermes has a clean plugin API for web search backends (`WebSearchProvider`)
+and image generation backends (`ImageGenProvider`), but **not yet** for TTS
+or STT — those dispatchers are hardcoded if/elif chains over a built-in
+provider list. To add a third-party provider without modifying Hermes core,
+this plugin's `register()` wraps `text_to_speech_tool` and `transcribe_audio`
+with a short-circuit that runs our httpx client when the user has selected
+`9router`, falling through to the original dispatcher for every other
+provider. The patches are idempotent and only fire when configured.
+
+Web tools have a separate gating problem: `check_web_api_key` /
+`_is_backend_available` hardcode a seven-name allowlist, so any third-party
+`WebSearchProvider` is correctly discovered but invisible to the model.
+The plugin patches both functions (and the captured `ToolEntry.check_fn`
+references in the registry) so any registered provider that reports
+`is_available() == True` counts.
+
+If/when Hermes upstream adds `register_tts_provider` and
+`register_transcription_provider`, those patches can be replaced with proper
+provider classes.
 
 ## Layout
 
 ```
-web-9router/
+9router-omni/
 ├── plugin.yaml      # Hermes manifest (kind: backend)
-├── __init__.py      # register() — wires the provider + gating patch
-├── provider.py      # NineRouterWebSearchProvider
+├── __init__.py      # register() — wires providers + installs patches
+├── _http.py         # shared httpx helpers (JSON, binary-response, multipart)
+├── web.py           # NineRouterWebSearchProvider
+├── image_gen.py     # NineRouterImageGenProvider
+├── tts.py           # _generate_9router_tts + install_tts_patch
+├── stt.py           # _transcribe_9router + install_stt_patch
 ├── LICENSE
 └── README.md
 ```
 
 ## Troubleshooting
 
-- **Tools not visible to the model.** Confirm `hermes plugins list` shows
-  `web-9router` as `enabled` and that both env vars are set. The gating patch
-  needs to fire during plugin registration.
-- **`401 Unauthorized` from the gateway.** Your `NINEROUTER_API_KEY` is stale
-  or wrong. The 9router admin UI is the source of truth.
-- **`9router /v1/web/fetch failed: ...` per URL.** The gateway is reachable
-  but the target URL timed out or returned an error — extraction continues
-  for the remaining URLs and per-URL failures appear with an `error` field
-  in the response.
-- **Hangs / 30s+ extracts.** Some pages are genuinely slow on the gateway
-  side. The plugin uses a 60s per-request timeout; tune `REQUEST_TIMEOUT_S`
-  in `provider.py` if needed.
+- **Tool not visible to the model.** Confirm `hermes plugins list` shows
+  `9router-omni` as `enabled` and that both env vars are set in
+  `~/.hermes/.env`. Web search/extract has a known gating quirk handled by
+  the plugin's monkey-patch — make sure the plugin registered successfully
+  (look for `Plugin '9router-omni' registered web provider: 9router` in
+  `~/.hermes/logs/agent.log`).
+- **`401 Unauthorized` from the gateway.** Your `NINEROUTER_API_KEY` is
+  stale or wrong. Check the 9router admin UI.
+- **Image saves with wrong extension.** The gateway returned a `Content-Type`
+  other than what we expected. For image, response is always saved as
+  `.png` via Hermes' `save_b64_image`; for TTS, the extension is adjusted
+  from the `Content-Type` header.
+- **STT returns empty transcript.** Check the gateway logs — most 9router
+  STT providers handle short / silent audio gracefully, but some return
+  `{"text": ""}` rather than an error.
 
 ## License
 

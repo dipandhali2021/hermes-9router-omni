@@ -1,4 +1,21 @@
-from .provider import NineRouterWebSearchProvider
+"""9router-omni Hermes plugin — web search, web extract, image gen, TTS, STT.
+
+Routes Hermes' built-in web search, web extract, image generation, TTS, and STT
+tool calls through a single 9router gateway. Web and image use the proper
+Hermes provider plugin APIs; TTS and STT monkey-patch the dispatchers because
+Hermes has no register_tts_provider / register_transcription_provider yet.
+
+Env vars (both required):
+    NINEROUTER_BASE_URL
+    NINEROUTER_API_KEY
+"""
+
+from __future__ import annotations
+
+from .image_gen import NineRouterImageGenProvider
+from .stt import install_stt_patch
+from .tts import install_tts_patch
+from .web import NineRouterWebSearchProvider
 
 
 def _patch_web_tools_gating() -> None:
@@ -61,4 +78,7 @@ def _patch_web_tools_gating() -> None:
 
 def register(ctx) -> None:
     ctx.register_web_search_provider(NineRouterWebSearchProvider())
+    ctx.register_image_gen_provider(NineRouterImageGenProvider())
     _patch_web_tools_gating()
+    install_tts_patch()
+    install_stt_patch()
