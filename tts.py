@@ -1,180 +1,120 @@
-"""9router TTS provider for Hermes (monkey-patch).
+"""Native Hermes TTS provider backed by a 9router gateway.
 
-Hermes has no ``TTSProvider`` ABC or ``ctx.register_tts_provider()`` API —
-TTS dispatch is a hardcoded if/elif chain in
-``tools/tts_tool.py::text_to_speech_tool``. We install a wrapper that
-short-circuits to our 9router HTTP client when the user has configured
-``tts.provider: 9router`` in ``~/.hermes/config.yaml``; everything else
-falls through to the original built-in dispatcher.
-
-9router endpoint: ``POST /v1/audio/speech`` with ``{model, input}``.
-Response is raw audio bytes (mp3 by default) with the ``Content-Type``
-header set accordingly.
+Registered through ``ctx.register_tts_provider`` (Hermes v0.17+). The old
+dispatcher monkey-patch approach is gone — this module is a plain
+``TTSProvider`` subclass.
 """
 
 from __future__ import annotations
 
-import datetime
-import json
 import logging
-import os
-import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+from agent.tts_provider import TTSProvider
 
 from ._http import is_configured, post_json_bytes
+from .catalog import fetch_catalog
+from .settings import (
+    DEFAULT_TTS_MODEL,
+    PROVIDER_NAME,
+    compose_tts_model,
+    ext_for_content_type,
+    load_hermes_config,
+    resolve_tts_model,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gpt-4o-mini-tts"
-PROVIDER_NAME = "9router"
+TTS_FALLBACK_MODELS = ("tts-combo", "openai/tts-1", "openai/gpt-4o-mini-tts")
 
 
-def _load_9router_tts_config() -> Dict[str, Any]:
-    try:
-        from hermes_cli.config import load_config
+class NineRouterTTSProvider(TTSProvider):
+    """Text-to-speech via the gateway's ``/v1/audio/speech`` endpoint."""
 
-        cfg = load_config()
-        section = cfg.get("tts") if isinstance(cfg, dict) else None
-        if not isinstance(section, dict):
-            return {}
-        sub = section.get("9router")
-        return sub if isinstance(sub, dict) else {}
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Could not load tts.9router config: %s", exc)
-        return {}
+    name = PROVIDER_NAME
+    display_name = PROVIDER_NAME
 
+    @property
+    def voice_compatible(self) -> bool:  # type: ignore[override]
+        """False: the wizard decides per model.
 
-def _resolve_model() -> str:
-    cfg = _load_9router_tts_config()
-    model = cfg.get("model")
-    if isinstance(model, str) and model.strip():
-        return model.strip()
-    return DEFAULT_MODEL
+        A global passthrough would compose voices onto combo models, which
+        the gateway rejects; non-combo models get their voice composed into
+        the model id at synthesize time.
+        """
+        return False
 
+    def is_available(self) -> bool:
+        return is_configured()
 
-def _ext_for_content_type(content_type: str) -> str:
-    ct = (content_type or "").split(";", 1)[0].strip().lower()
-    if "mpeg" in ct or "mp3" in ct:
-        return "mp3"
-    if "wav" in ct:
-        return "wav"
-    if "ogg" in ct or "opus" in ct:
-        return "ogg"
-    if "webm" in ct:
-        return "webm"
-    if "flac" in ct:
-        return "flac"
-    return "mp3"
-
-
-def _generate_9router_tts(text: str, file_path: str) -> Dict[str, Any]:
-    """Hit /v1/audio/speech and write the audio bytes to ``file_path``."""
-    model = _resolve_model()
-    payload = {"model": model, "input": text}
-
-    logger.info("9router TTS: model=%s len=%d → %s", model, len(text), file_path)
-    audio, content_type = post_json_bytes("/v1/audio/speech", payload, timeout=120)
-    if not audio:
-        raise RuntimeError("9router /v1/audio/speech returned empty body")
-
-    # Adjust file extension if the server returned something other than mp3.
-    actual_ext = _ext_for_content_type(content_type)
-    base, current_ext = os.path.splitext(file_path)
-    if current_ext.lstrip(".").lower() != actual_ext:
-        file_path = f"{base}.{actual_ext}"
-
-    Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(file_path).write_bytes(audio)
-    return {
-        "file_path": file_path,
-        "content_type": content_type,
-        "bytes": len(audio),
-        "model": model,
-    }
-
-
-def _resolve_output_path(output_path: Optional[str]) -> str:
-    if output_path:
-        return str(Path(output_path).expanduser())
-    out_dir = Path.home() / "voice-memos"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return str(out_dir / f"tts_{timestamp}.mp3")
-
-
-def _build_response(file_path: str, voice_compatible: bool = False) -> str:
-    media_tag = f"MEDIA:{file_path}"
-    if voice_compatible:
-        media_tag = f"[[audio_as_voice]]\n{media_tag}"
-    return json.dumps(
-        {
-            "success": True,
-            "file_path": file_path,
-            "media_tag": media_tag,
-            "provider": PROVIDER_NAME,
-            "voice_compatible": voice_compatible,
-        },
-        ensure_ascii=False,
-    )
-
-
-def _error_response(message: str) -> str:
-    return json.dumps({"success": False, "error": message}, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Monkey-patch installer
-# ---------------------------------------------------------------------------
-
-
-def install_tts_patch() -> None:
-    from tools import tts_tool
-
-    if getattr(tts_tool.text_to_speech_tool, "_9router_patched", False):
-        return
-
-    original = tts_tool.text_to_speech_tool
-
-    def patched_text_to_speech_tool(
+    def synthesize(
+        self,
         text: str,
-        output_path: Optional[str] = None,
+        output_path: str,
+        *,
+        voice: Optional[str] = None,
+        model: Optional[str] = None,
+        speed: Optional[float] = None,
+        format: str = "mp3",
+        **extra: Any,
     ) -> str:
-        # Read current config on every call so flipping providers in
-        # config.yaml takes effect without restarting Hermes.
-        try:
-            tts_config = tts_tool._load_tts_config()
-            provider = tts_tool._get_provider(tts_config)
-        except Exception:  # noqa: BLE001 — fall back to original on any read error
-            return original(text, output_path)
-
-        if provider != "9router":
-            return original(text, output_path)
-
-        if not text or not text.strip():
-            return _error_response("Text is required")
-
-        if not is_configured():
-            return _error_response(
-                "9router not configured. Set NINEROUTER_BASE_URL and "
-                "NINEROUTER_API_KEY in ~/.hermes/.env."
+        """Synthesize ``text`` to ``output_path``; return the final path."""
+        resolved = model or resolve_tts_model(load_hermes_config())
+        composed = compose_tts_model(resolved, voice)
+        audio, content_type = post_json_bytes(
+            "/v1/audio/speech",
+            {"model": composed, "input": text},
+            timeout=120,
+        )
+        if not audio:
+            raise RuntimeError(
+                f"9router TTS returned empty audio for model {composed!r}"
             )
 
-        file_path = _resolve_output_path(output_path)
+        path = Path(output_path)
+        extension = ext_for_content_type(content_type)
+        if path.suffix.lower() != f".{extension}":
+            path = path.with_suffix(f".{extension}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(audio)
+        return str(path)
 
+    def list_models(self) -> List[Dict[str, Any]]:
         try:
-            result = _generate_9router_tts(text, file_path)
-        except ValueError as exc:  # missing env
-            return _error_response(str(exc))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("9router TTS error: %s", exc)
-            return _error_response(f"9router TTS failed: {exc}")
+            entries = fetch_catalog("tts")
+        except Exception as exc:  # unreachable gateway, bad key, junk payload…
+            logger.debug("9router TTS catalog unavailable: %s", exc)
+            entries = []
+        if not entries:
+            return [
+                {"id": model_id, "display": model_id}
+                for model_id in TTS_FALLBACK_MODELS
+            ]
+        return [
+            {
+                "id": entry.id,
+                "display": entry.id + (" (combo)" if entry.is_combo else ""),
+            }
+            for entry in entries
+        ]
 
-        actual_path = result["file_path"]
-        # Opus delivery only when the platform asks for a voice bubble. Since
-        # 9router default output is mp3, telegram voice will trigger ffmpeg
-        # conversion downstream — we just return the raw mp3 path here.
-        return _build_response(actual_path, voice_compatible=False)
+    def default_model(self) -> str:
+        return DEFAULT_TTS_MODEL
 
-    patched_text_to_speech_tool._9router_patched = True  # type: ignore[attr-defined]
-    tts_tool.text_to_speech_tool = patched_text_to_speech_tool
+    def get_setup_schema(self) -> Dict[str, Any]:
+        return {
+            "name": PROVIDER_NAME,
+            "badge": "self-hosted",
+            "tag": "Self-hosted 9router gateway — proxies /v1/audio/speech.",
+            "env_vars": [
+                {
+                    "key": "NINEROUTER_BASE_URL",
+                    "prompt": "9router gateway base URL (e.g. http://127.0.0.1:20128)",
+                },
+                {
+                    "key": "NINEROUTER_API_KEY",
+                    "prompt": "9router API key (optional — leave empty for keyless gateways)",
+                },
+            ],
+        }
