@@ -1,7 +1,7 @@
 # 9router-omni v3 — install-time setup wizard, live catalogs, native TTS/STT
 
 **Date:** 2026-10-17
-**Status:** Ready for owner approval (builder review complete, findings folded in)
+**Status:** Approved 2026-10-17 — implementation plan: `docs/superpowers/plans/2026-10-17-9router-omni-v3-setup-wizard.md`
 **Author:** brainstorming session — dipandhali2021 (owner) + agent
 **Repo:** `hermes-9router-omni` (Hermes Agent plugin, `kind: backend`)
 
