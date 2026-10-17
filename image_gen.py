@@ -5,15 +5,17 @@ Implements :class:`agent.image_gen_provider.ImageGenProvider`. Routes
 configured 9router gateway. Activate via ``image_gen.provider: "9router"`` in
 ``~/.hermes/config.yaml``.
 
-Optional config under ``image_gen.9router``:
+Canonical model key: ``image_gen.model`` (the legacy
+``image_gen.9router.model`` still reads). Optional passthrough knobs stay
+under ``image_gen.9router``:
 
 .. code-block:: yaml
 
     image_gen:
       provider: 9router
+      model: "image-combo"        # default; gateway auto-fallback combo
       9router:
-        model: "gemini/gemini-3-pro-image-preview"   # default
-        quality: "high"                              # optional, passed through
+        quality: "high"           # optional, passed through
 """
 
 from __future__ import annotations
@@ -32,10 +34,25 @@ from agent.image_gen_provider import (
 )
 
 from ._http import is_configured, post_json
+from .settings import DEFAULT_IMAGE_MODEL, load_hermes_config, resolve_image_model
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini/gemini-3-pro-image-preview"
+DEFAULT_MODEL = DEFAULT_IMAGE_MODEL
+
+CURATED_MODELS = (
+    "image-combo",
+    "gemini/gemini-3.1-flash-image-preview",
+    "gemini/gemini-3-pro-image-preview",
+    "nb/nanobanana-flash",
+)
+
+_CURATED_DISPLAYS = {
+    "image-combo": "9router image combo (default)",
+    "gemini/gemini-3.1-flash-image-preview": "Gemini 3.1 Flash Image (preview)",
+    "gemini/gemini-3-pro-image-preview": "Gemini 3 Pro Image (preview)",
+    "nb/nanobanana-flash": "Nanobanana Flash",
+}
 
 _SIZES = {
     "landscape": "1536x1024",
@@ -45,7 +62,11 @@ _SIZES = {
 
 
 def _load_9router_image_config() -> Dict[str, Any]:
-    """Read ``image_gen.9router`` from config.yaml (empty dict on any failure)."""
+    """Read ``image_gen.9router`` from config.yaml (empty dict on any failure).
+
+    Still used for optional passthrough knobs (``quality``); model resolution
+    lives in :func:`_resolve_model`.
+    """
     try:
         from hermes_cli.config import load_config
 
@@ -61,11 +82,8 @@ def _load_9router_image_config() -> Dict[str, Any]:
 
 
 def _resolve_model() -> str:
-    cfg = _load_9router_image_config()
-    model = cfg.get("model")
-    if isinstance(model, str) and model.strip():
-        return model.strip()
-    return DEFAULT_MODEL
+    """``image_gen.model`` -> legacy ``image_gen.9router.model`` -> default."""
+    return resolve_image_model(load_hermes_config())
 
 
 def _safe_prefix(model: str) -> str:
@@ -110,30 +128,29 @@ class NineRouterImageGenProvider(ImageGenProvider):
         return is_configured()
 
     def list_models(self) -> List[Dict[str, Any]]:
-        # 9router proxies many backends — we expose a representative default
-        # plus whatever the user has pinned in config. The full catalog is
-        # discoverable via GET /v1/models/image on the gateway itself.
+        """Curated shortlist — never dump the gateway's full image catalog.
+
+        Exposes the gateway combo, three representative models, and the
+        configured model when it falls outside that set.
+        """
         models = [
-            {
-                "id": DEFAULT_MODEL,
-                "display": "Gemini 3 Pro Image (default)",
-                "strengths": "9router default; broad model coverage",
-            }
+            {"id": model_id, "display": _CURATED_DISPLAYS.get(model_id, model_id)}
+            for model_id in CURATED_MODELS
         ]
         configured = _resolve_model()
-        if configured != DEFAULT_MODEL:
+        if configured not in CURATED_MODELS:
             models.insert(
                 0,
                 {
                     "id": configured,
                     "display": f"{configured} (configured)",
-                    "strengths": "Active model from image_gen.9router.model",
+                    "strengths": "Active model from image_gen.model",
                 },
             )
         return models
 
-    def default_model(self) -> Optional[str]:
-        return _resolve_model()
+    def default_model(self) -> str:
+        return DEFAULT_MODEL
 
     def generate(
         self,
@@ -154,8 +171,8 @@ class NineRouterImageGenProvider(ImageGenProvider):
         if not is_configured():
             return error_response(
                 error=(
-                    "9router not configured. Set NINEROUTER_BASE_URL and "
-                    "NINEROUTER_API_KEY in ~/.hermes/.env."
+                    "9router not configured. Set NINEROUTER_BASE_URL in "
+                    "~/.hermes/.env."
                 ),
                 error_type="auth_required",
                 provider="9router",
@@ -272,7 +289,7 @@ class NineRouterImageGenProvider(ImageGenProvider):
                 },
                 {
                     "key": "NINEROUTER_API_KEY",
-                    "prompt": "9router API key",
+                    "prompt": "9router API key (optional — leave empty for keyless gateways)",
                     "url": "",
                 },
             ],
