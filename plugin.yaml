@@ -1,5 +1,5 @@
 name: 9router-omni
-version: 2.0.0
+version: 3.0.0
 description: "Route web search, web extract, image generation, TTS, and STT through a 9router gateway."
 author: dipandhali2021
 kind: backend
@@ -8,5 +8,8 @@ provides_web_providers:
 provides_image_gen_providers:
   - 9router
 requires_env:
-  - NINEROUTER_BASE_URL
-  - NINEROUTER_API_KEY
+  - name: NINEROUTER_BASE_URL
+    description: "9router gateway base URL, e.g. http://127.0.0.1:20128"
+  - name: NINEROUTER_API_KEY
+    description: "9router API key (optional — leave empty for keyless gateways)"
+    secret: true
