@@ -1,6 +1,9 @@
+import importlib.util
 import sys
 import types
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -66,3 +69,23 @@ def _stub_hermes_modules() -> None:
 
 
 _stub_hermes_modules()
+
+
+def _load_plugin_package():
+    """Load the real __init__.py the way Hermes does (as a package)."""
+    name = "ninerouter_omni_pkg"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
+    module = importlib.util.module_from_spec(spec)
+    module.__package__ = name
+    module.__path__ = [str(ROOT)]
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def plugin_pkg():
+    return _load_plugin_package()

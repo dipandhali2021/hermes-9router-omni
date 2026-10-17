@@ -1,21 +1,29 @@
 """9router-omni Hermes plugin — web search, web extract, image gen, TTS, STT.
 
 Routes Hermes' built-in web search, web extract, image generation, TTS, and STT
-tool calls through a single 9router gateway. Web and image use the proper
-Hermes provider plugin APIs; TTS and STT monkey-patch the dispatchers because
-Hermes has no register_tts_provider / register_transcription_provider yet.
+tool calls through a single 9router gateway using Hermes v0.17+ native provider
+hooks (``register_web_search_provider``, ``register_image_gen_provider``,
+``register_tts_provider``, ``register_transcription_provider``).
 
-Env vars (both required):
-    NINEROUTER_BASE_URL
-    NINEROUTER_API_KEY
+Model selection: run ``hermes 9router setup`` — a wizard over the gateway's
+live per-modality catalogs (picks models, voice, and the capabilities to route).
+
+Env vars:
+    NINEROUTER_BASE_URL    required, e.g. ``http://127.0.0.1:20128``
+    NINEROUTER_API_KEY     optional — leave empty for keyless gateways
 """
 
 from __future__ import annotations
 
+import logging
+
+from . import setup_cmd
 from .image_gen import NineRouterImageGenProvider
-from .stt import install_stt_patch
-from .tts import install_tts_patch
+from .stt import NineRouterTranscriptionProvider
+from .tts import NineRouterTTSProvider
 from .web import NineRouterWebSearchProvider
+
+logger = logging.getLogger(__name__)
 
 
 def _patch_web_tools_gating() -> None:
@@ -77,8 +85,31 @@ def _patch_web_tools_gating() -> None:
 
 
 def register(ctx) -> None:
+    """Plugin entrypoint: register all four providers + the setup CLI."""
     ctx.register_web_search_provider(NineRouterWebSearchProvider())
     ctx.register_image_gen_provider(NineRouterImageGenProvider())
-    _patch_web_tools_gating()
-    install_tts_patch()
-    install_stt_patch()
+
+    try:
+        ctx.register_tts_provider(NineRouterTTSProvider())
+        ctx.register_transcription_provider(NineRouterTranscriptionProvider())
+    except AttributeError:
+        logger.warning(
+            "Hermes v0.17.0+ is required for native TTS/STT providers; "
+            "web search and image generation remain active."
+        )
+
+    try:
+        _patch_web_tools_gating()
+    except Exception as exc:  # noqa: BLE001 — a Hermes refactor must not break plugin load
+        logger.warning(
+            "Could not patch web-tool backend gating (%s); web search/extract "
+            "may report as unavailable until Hermes updates. Plugin load continues.",
+            exc,
+        )
+
+    ctx.register_cli_command(
+        name="9router",
+        help="9router gateway setup — pick models from your gateway's live catalog",
+        setup_fn=setup_cmd.register_subcommand,
+        handler_fn=setup_cmd.handle_setup,
+    )
