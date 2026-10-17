@@ -1,7 +1,7 @@
 # 9router-omni v3 — install-time setup wizard, live catalogs, native TTS/STT
 
 **Date:** 2026-10-17
-**Status:** Draft for review
+**Status:** Ready for owner approval (builder review complete, findings folded in)
 **Author:** brainstorming session — dipandhali2021 (owner) + agent
 **Repo:** `hermes-9router-omni` (Hermes Agent plugin, `kind: backend`)
 
@@ -79,6 +79,10 @@ back-compat config reads, version bump.
 | 14 | Config keys: **follow Hermes conventions** on write; old keys read as fallback |
 | 15 | Audience: **public-quality** |
 | 16 | **pytest suite** required |
+| 17 | Re-run: **unchecking a capability actively disables** 9router for it |
+| 18 | Web: wizard writes **per-capability keys** (`web.search_backend` / `web.extract_backend`) |
+| 19 | TTS voice: **compose `model/voice` at call time**; wizard offers voice only for non-combo models |
+| 20 | **Keyless gateways supported** (`requireApiKey=false` → no Authorization header) |
 
 ---
 
@@ -147,20 +151,30 @@ web entries; per-modality endpoints are already partitioned by capability.
    - `after-install.md` panel: "Next: run `hermes 9router setup` to pick models
      from your gateway's live catalog."
 2. `hermes 9router setup` — the wizard (re-runnable any time):
-   1. **Env check** — prompt for missing URL / key (masked), save to `.env`.
-   2. **Connect check** — `GET {base}/v1/models/tts` with auth.
-      On failure: clear error + re-prompt URL/key or abort (never proceed
-      silently). Note: localhost model lists answer unauthenticated, so the
-      check must actually validate the key path the plugin uses.
+   1. **Env check** — ask "does your gateway require an API key?" (default yes).
+      If yes: prompt for missing URL / key (masked), save to `.env`. If no:
+      prompt URL only; blank key = keyless mode (no Authorization header).
+   2. **Connect + auth probe** — `GET {base}/v1/models/tts` validates
+      reachability; since localhost model lists answer unauthenticated,
+      follow with `POST {base}/v1/audio/speech` with a deliberately missing
+      `input` field: **401 = bad/missing key, 400 = auth passed** (verified
+      against the gateway). On failure: clear error + re-prompt URL/key or
+      abort (never proceed silently).
    3. **Capability multiselect** — web search, web fetch, TTS, STT, image.
-      First run: all five on. Re-run: mirror current config state.
+      First run: all five on. Re-run: mirror current config state. Unchecking
+      a currently-enabled capability **actively disables** 9router for it on
+      save (see 6.2 — only ever removes 9router's own selections; non-9router
+      values are never touched).
    4. **Per capability** (in order: web search, web fetch, TTS, STT, image):
       fetch that capability's live catalog → **provider-first two-step pick**
       (step 1: pick `owned_by` group, combos pinned first; step 2: pick the
       model; current value pre-selected and marked "currently in use").
-   5. **TTS extra:** voice prompt (free-text with common suggestions:
-      alloy/echo/fable/onyx/nova/shimmer + any voices found for the TTS
-      provider if the voices endpoint works). Empty = don't touch `tts.voice`.
+   5. **TTS extra (non-combo models only):** voice prompt (free-text with
+      common suggestions: alloy/echo/fable/onyx/nova/shimmer; provider voice
+      lists fetched from `/v1/audio/voices` when the model's provider is one
+      of elevenlabs/deepgram/inworld/edge-tts). **Skipped when the picked TTS
+      model is a combo** — 9router rejects `combo/voice` strings (see 6.3).
+      Empty = don't touch `tts.voice`.
    6. **Write config** (see 6.2) + enable only picked capabilities.
    7. **Smoke test:** re-fetch each selected capability's list endpoint and
       print a ✓ summary table. Non-zero exit if any fails.
@@ -175,11 +189,28 @@ web entries; per-modality endpoints are already partitioned by capability.
 
 | Capability | Wizard writes | Provider reads (first hit wins) |
 |---|---|---|
-| Web search | `web.backend: "9router"`, `web.9router.search_model` | `web.9router.search_model` → code default `openclaw-search` |
-| Web fetch | `web.9router.fetch_model` | `web.9router.fetch_model` → code default `openclaw-fetch` |
+| Web search | `web.search_backend: "9router"`, `web.9router.search_model` | `web.search_backend` → `web.backend` → code default `openclaw-search` |
+| Web fetch | `web.extract_backend: "9router"`, `web.9router.fetch_model` | `web.extract_backend` → `web.backend` → code default `openclaw-fetch` |
 | TTS | `tts.provider: "9router"`, `tts.model`, (`tts.voice` if given) | dispatcher-passed `model` → `tts.model` → `tts.9router.model` → code default `tts-combo` |
 | STT | `stt.provider: "9router"`, `stt.enabled: true`, `stt.9router.model` | dispatcher-passed `model` → `stt.9router.model` → code default `stt-combo` |
 | Image | `image_gen.provider: "9router"`, `image_gen.model` | `image_gen.model` → `image_gen.9router.model` → code default `image-combo` |
+
+Per-capability web keys matter: Hermes evaluates `web.search_backend` /
+`web.extract_backend` **before** `web.backend`, so writing the specific keys
+makes the wizard's two web toggles independent and keeps an existing override
+for the other half (e.g. `web.extract_backend: tavily`) respected.
+
+**Disable-on-uncheck policy (re-runs):** unchecking a capability removes only
+9router's own selection — never anything else:
+- Web search/fetch: delete `web.search_backend` / `web.extract_backend` when it
+  equals `"9router"`; when **both** become unselected, also delete
+  `web.backend` if it equals `"9router"`.
+- TTS / STT / image: delete the provider key (`tts.provider`, `stt.provider`,
+  `image_gen.provider`) only when it equals `"9router"`. STT keeps
+  `stt.enabled` as-is (unchecking turns off *9router routing*, not speech
+  entirely).
+- Model keys (`tts.model`, `stt.9router.model`, …) are left in place — inert
+  without a provider selection, and reused if the capability is re-enabled.
 
 Old keys (`tts.9router.model`, `image_gen.9router.model`) remain readable so
 existing installs keep working after update. Nothing is deleted or rewritten
@@ -188,8 +219,17 @@ outside this table.
 ### 6.3 Provider implementations
 
 - **`tts.py` → `NineRouterTTSProvider(TTSProvider)`**
-  - `synthesize()`: `POST /v1/audio/speech {model, input, voice?}`; write bytes,
-    fix extension from `Content-Type` (keep existing logic); `voice_compatible = False`.
+  - `synthesize()`: `POST /v1/audio/speech` with **voice composed into the
+    model id** — 9router ignores a top-level `voice` field entirely (verified
+    in 9router v1.5.104 source; only `model/input/language/style` are read).
+    Rule: when `voice` is set, send `"<model>/<voice>"` (e.g.
+    `openai/tts-1` + `nova` → `openai/tts-1/nova`), unless the model already
+    ends with `/<voice>`. Combos (`owned_by: combo`, plain names like
+    `tts-combo`) reject suffixed strings — the wizard prevents combo+voice,
+    and a hand-edited combo+voice config surfaces the gateway's error as the
+    standard error envelope (no silent drop).
+  - Write bytes, fix extension from `Content-Type` (keep existing logic);
+    `voice_compatible = False`.
   - `list_models()`: live `/v1/models/tts` (cached in-process for the call),
     fallback shortlist; `default_model()` → `tts-combo`.
   - `get_setup_schema()`: name "9router", badge "self-hosted", env vars.
@@ -231,6 +271,10 @@ tests/           # NEW — pytest suite (fixtures from the real gateway)
 
 - Gateway unreachable at wizard start → abort with fix instructions (no config
   writes).
+- Keyless mode: empty `NINEROUTER_API_KEY` is valid when the user said the
+  gateway needs no key — `is_configured()` only requires the base URL, and the
+  Authorization header is omitted. Install prompt description marks the key
+  "optional — leave empty for keyless gateways".
 - Catalog fetch fails mid-wizard → offer retry/skip; skipped capability is left
   untouched (never re-enabled implicitly).
 - Runtime model missing from gateway → provider returns the standard error
@@ -274,15 +318,26 @@ tests/           # NEW — pytest suite (fixtures from the real gateway)
    to exist as combos on this gateway (public users get their own list via the
    wizard; a fresh 9router may name combos differently).
 3. **Voice input is free-text + suggestions** — the gateway's voices endpoint
-   covers only 4 named providers and no OpenAI; no reliable enumeration.
+   covers only 4 named providers and no OpenAI; no reliable enumeration. Voice
+   is offered only for non-combo TTS models and sent as `model/voice`
+   composition at call time (settled: option A).
 4. **No catalog caching in v3** — wizard is interactive and rare; fetch live.
-5. **`--yes` + model flags** for scripted installs; non-TTY without `--yes`
-   refuses.
+5. **`--yes` semantics:** mirror the existing config where present, fill the
+   rest with defaults, enable all five capabilities; non-TTY without `--yes`
+   refuses. Model flags override individual picks.
 6. **Tests runnable with plain `pytest` + `httpx`** (no packaging changes);
    fixtures are small hand-trimmed snapshots of the live lists.
 7. TTS `output_format`/`speed` remain optional manual config passthroughs —
    not prompted (user chose model + voice only).
+8. **Auth probe technique:** `POST /v1/audio/speech` without `input` →
+   401 vs 400 to distinguish bad key vs auth OK (verified against gateway).
+9. **Uncheck-disable writes** are exactly as specified in 6.2 — only 9router's
+   own selections are ever removed.
 
 ## 8. Open items (need the owner)
 
-*(Filled in after the builder review — anything only the owner can answer.)*
+**None.** The builder review (2026-10-17) raised four owner-only questions —
+capability-uncheck semantics, web backend keys, TTS voice routing, keyless
+gateways — all answered and folded into sections 4 and 6. The review's
+verified findings (9router voice handling, `web.*_backend` precedence, the
+401/400 auth probe) are incorporated above.
