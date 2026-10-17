@@ -5,10 +5,15 @@ Implements :class:`agent.web_search_provider.WebSearchProvider`. Routes
 on the configured 9router gateway. Activate via ``web.backend: "9router"`` (or
 ``web.search_backend`` / ``web.extract_backend``) in ``~/.hermes/config.yaml``.
 
-Env vars (both required):
+Model names come from config (``web.9router.search_model`` /
+``web.9router.fetch_model``), falling back to the gateway combo defaults.
+
+Env vars:
     NINEROUTER_BASE_URL    Base URL of the 9router gateway, e.g.
                            ``http://127.0.0.1:20128`` for a local install.
-    NINEROUTER_API_KEY     Bearer token for the gateway.
+                           Required.
+    NINEROUTER_API_KEY     Bearer token. Optional — leave unset (or empty)
+                           for keyless gateways.
 """
 
 from __future__ import annotations
@@ -18,12 +23,10 @@ from typing import Any, Dict, List
 
 from agent.web_search_provider import WebSearchProvider
 
-from ._http import is_configured, post_json as _post_json
+from ._http import is_configured, post_json
+from .settings import load_hermes_config, resolve_fetch_model, resolve_search_model
 
 logger = logging.getLogger(__name__)
-
-SEARCH_MODEL = "openclaw-search"
-FETCH_MODEL = "openclaw-fetch"
 
 
 def _normalize_search(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -108,10 +111,10 @@ class NineRouterWebSearchProvider(WebSearchProvider):
 
             count = max(1, min(int(limit or 5), 20))
             logger.info("9router search: '%s' (limit=%d)", query, count)
-            raw = _post_json(
+            raw = post_json(
                 "/v1/search",
                 {
-                    "model": SEARCH_MODEL,
+                    "model": resolve_search_model(load_hermes_config()),
                     "query": query,
                     "search_type": "web",
                     "max_results": count,
@@ -143,10 +146,10 @@ class NineRouterWebSearchProvider(WebSearchProvider):
             for url in urls:
                 try:
                     logger.info("9router fetch: %s", url)
-                    raw = _post_json(
+                    raw = post_json(
                         "/v1/web/fetch",
                         {
-                            "model": FETCH_MODEL,
+                            "model": resolve_fetch_model(load_hermes_config()),
                             "url": url,
                             "extract_mode": extract_mode,
                             "max_chars": max_chars,
@@ -198,7 +201,7 @@ class NineRouterWebSearchProvider(WebSearchProvider):
                 },
                 {
                     "key": "NINEROUTER_API_KEY",
-                    "prompt": "9router API key",
+                    "prompt": "9router API key (optional — leave empty for keyless gateways)",
                     "url": "",
                 },
             ],
