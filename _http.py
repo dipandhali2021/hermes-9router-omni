@@ -2,10 +2,13 @@
 
 All four capability modules (web, image_gen, tts, stt) import from here.
 
-Env vars (both required):
+Env vars:
     NINEROUTER_BASE_URL    Base URL of the 9router gateway, e.g.
                            ``http://127.0.0.1:20128`` for a local install.
-    NINEROUTER_API_KEY     Bearer token for the gateway.
+                           Required.
+    NINEROUTER_API_KEY     Bearer token for the gateway. Optional — leave
+                           unset (or empty) for keyless gateways; requests
+                           then omit the Authorization header.
 """
 
 from __future__ import annotations
@@ -30,24 +33,34 @@ def base_url() -> str:
 
 
 def api_key() -> str:
-    key = os.getenv("NINEROUTER_API_KEY", "").strip()
-    if not key:
-        raise ValueError(
-            "NINEROUTER_API_KEY environment variable not set. "
-            "Set it to your 9router bearer token."
-        )
-    return key
+    """Bearer token, or ``""`` for keyless gateways. Never raises."""
+    return os.getenv("NINEROUTER_API_KEY", "").strip()
 
 
 def is_configured() -> bool:
-    return bool(
-        os.getenv("NINEROUTER_API_KEY", "").strip()
-        and os.getenv("NINEROUTER_BASE_URL", "").strip()
-    )
+    """True when a base URL is set; the API key is optional."""
+    return bool(os.getenv("NINEROUTER_BASE_URL", "").strip())
+
+
+def get_json(path: str, *, timeout: int = 15) -> Any:
+    """GET ``{base}{path}`` and return parsed JSON.
+
+    Sends the bearer header only when an API key is configured.
+    """
+    import httpx
+
+    url = f"{base_url()}{path}"
+    logger.info("9router GET %s", url)
+    response = httpx.get(url, headers=_bearer_headers(), timeout=timeout)
+    _raise_for_status(response, path)
+    return response.json()
 
 
 def _bearer_headers(extra: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    headers = {"Authorization": f"Bearer {api_key()}"}
+    headers: Dict[str, str] = {}
+    key = api_key()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     if extra:
         headers.update(extra)
     return headers
