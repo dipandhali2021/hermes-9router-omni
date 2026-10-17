@@ -118,3 +118,11 @@ def test_fetch_capability_models_splits_web(monkeypatch):
     monkeypatch.setattr("ninerouter_omni.setup_cmd.fetch_catalog", lambda cap: entries)
     assert [e.id for e in wizard.fetch_capability_models("web_search")][0] == "openclaw-search"
     assert [e.id for e in wizard.fetch_capability_models("web_fetch")][0] == "openclaw-fetch"
+
+
+def test_plan_never_writes_voice_with_combo_model():
+    out = wizard.plan_writes(
+        {},
+        {"web_search": False, "web_fetch": False, "tts": True, "stt": False, "image": False},
+        models={"tts": "tts-combo"}, voice="nova")
+    assert out["tts"] == {"provider": "9router", "model": "tts-combo"}

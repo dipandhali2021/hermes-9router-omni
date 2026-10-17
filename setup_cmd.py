@@ -148,7 +148,9 @@ def plan_writes(
         if tts_model:
             tts["model"] = tts_model
         tts_voice = _clean(voice)
-        if tts_voice:
+        # Combo models take no voice suffix (§6.3): never persist the pair,
+        # even when a caller passes one in explicitly.
+        if tts_voice and not (tts_model or "").endswith("-combo"):
             tts["voice"] = tts_voice
 
     if enabled("stt"):
@@ -255,11 +257,18 @@ def register_subcommand(parser: Any) -> None:
 
 
 def handle_setup(args: Any) -> int:
-    """CLI handler (handler_fn). Routes ``hermes 9router setup`` to the wizard."""
+    """CLI handler (handler_fn). Routes ``hermes 9router setup`` to the wizard.
+
+    Hermes discards a handler's return value, so a failing wizard run exits
+    the process non-zero for scripted installs (§6.1 step 7).
+    """
     if getattr(args, "nine_router_command", None) != "setup":
         print("Run `hermes 9router setup` to configure models.")
         return 1
-    return run_wizard(args)
+    rc = run_wizard(args)
+    if rc:
+        raise SystemExit(rc)
+    return rc
 
 
 def run_wizard(args: Any) -> int:
@@ -516,6 +525,21 @@ def run_wizard(args: Any) -> int:
                 "TTS voice (empty = leave tts.voice unchanged): "
             ).strip()
             voice = answer or None
+
+    # A combo model accepts no voice suffix (§6.3): warn about it, and never
+    # persist the pair — the write planner enforces the same rule.
+    if (
+        voice
+        and decisions.get("tts") is True
+        and (
+            combo_picked.get("tts", False)
+            or str(models.get("tts") or "").endswith("-combo")
+        )
+    ):
+        console.print(
+            "[yellow]Voice ignored: combo models take no voice suffix.[/yellow]"
+        )
+        voice = None
 
     # -------- write config (§6.1 step 6) -----------------------------------
     out = plan_writes(cfg, decisions, models=models, voice=voice)

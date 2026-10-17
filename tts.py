@@ -37,11 +37,11 @@ class NineRouterTTSProvider(TTSProvider):
 
     @property
     def voice_compatible(self) -> bool:  # type: ignore[override]
-        """False: the wizard decides per model.
+        """False: output is delivered as a regular audio attachment.
 
-        A global passthrough would compose voices onto combo models, which
-        the gateway rejects; non-combo models get their voice composed into
-        the model id at synthesize time.
+        Hermes' flag describes voice-bubble delivery suitability, not whether
+        a model accepts a ``voice`` parameter — which models get one is
+        decided per model by the setup wizard (combos take no voice suffix).
         """
         return False
 

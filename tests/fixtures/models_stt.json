@@ -5,5 +5,5 @@
   {"id": "dg/nova-3", "object": "model", "owned_by": "dg"},
   {"id": "openai/whisper-1", "object": "model", "owned_by": "openai"},
   {"id": "openai/gpt-4o-transcribe", "object": "model", "owned_by": "openai"},
-  {"id": "el/scribe_v2", "object": "model", "owned_by": "elevenlabs"}
+  {"id": "el/scribe_v2", "object": "model", "owned_by": "el"}
 ]}
