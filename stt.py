@@ -1,15 +1,12 @@
-"""9router STT provider for Hermes (monkey-patch).
+"""Native Hermes transcription (STT) provider backed by a 9router gateway.
 
-Hermes has no STT plugin API — ``tools/transcription_tools.py::transcribe_audio``
-dispatches via a hardcoded if/elif chain over a small set of provider names.
-We install a wrapper that intercepts the call when the user has set
-``stt.provider: 9router`` in ``~/.hermes/config.yaml``; other providers
-fall through to the original dispatcher.
+Registered through ``ctx.register_transcription_provider`` (Hermes v0.17+).
+The old dispatcher monkey-patch is gone.
 
-9router endpoint: ``POST /v1/audio/transcriptions`` (OpenAI-compatible) with
-a ``multipart/form-data`` body carrying ``model``, ``file`` (the audio
-upload), and optional ``language`` / ``prompt`` / ``response_format`` /
-``temperature``. Response is JSON: ``{"text": "..."}``.
+Endpoint: ``POST /v1/audio/transcriptions`` (OpenAI-compatible) with a
+``multipart/form-data`` body carrying ``model``, ``file``, and optional
+``language`` / ``prompt`` / ``response_format`` / ``temperature`` from
+``stt.9router.*``. Response JSON: ``{"text": "..."}``.
 """
 
 from __future__ import annotations
@@ -17,14 +14,23 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+from agent.transcription_provider import TranscriptionProvider
 
 from ._http import is_configured, post_form
+from .catalog import fetch_catalog
+from .settings import (
+    DEFAULT_STT_MODEL,
+    PROVIDER_NAME,
+    build_transcription_fields,
+    load_hermes_config,
+    resolve_stt_model,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "openai/whisper-1"
-PROVIDER_NAME = "9router"
+STT_FALLBACK_MODELS = ("stt-combo", "groq/whisper-large-v3-turbo", "openai/gpt-4o-transcribe")
 
 _AUDIO_MIME_OVERRIDES = {
     ".mp3": "audio/mpeg",
@@ -38,32 +44,8 @@ _AUDIO_MIME_OVERRIDES = {
 }
 
 
-def _load_9router_stt_config() -> Dict[str, Any]:
-    try:
-        from hermes_cli.config import load_config
-
-        cfg = load_config()
-        section = cfg.get("stt") if isinstance(cfg, dict) else None
-        if not isinstance(section, dict):
-            return {}
-        sub = section.get("9router")
-        return sub if isinstance(sub, dict) else {}
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Could not load stt.9router config: %s", exc)
-        return {}
-
-
-def _resolve_model(override: Optional[str]) -> str:
-    if isinstance(override, str) and override.strip():
-        return override.strip()
-    cfg = _load_9router_stt_config()
-    model = cfg.get("model")
-    if isinstance(model, str) and model.strip():
-        return model.strip()
-    return DEFAULT_MODEL
-
-
-def _guess_mime(file_path: str) -> str:
+def guess_mime(file_path: str) -> str:
+    """Content type for an audio file: explicit overrides, then mimetypes."""
     ext = os.path.splitext(file_path)[1].lower()
     if ext in _AUDIO_MIME_OVERRIDES:
         return _AUDIO_MIME_OVERRIDES[ext]
@@ -71,113 +53,108 @@ def _guess_mime(file_path: str) -> str:
     return guess or "application/octet-stream"
 
 
-def _transcribe_9router(file_path: str, model: Optional[str]) -> Dict[str, Any]:
-    if not is_configured():
-        return {
-            "success": False,
-            "transcript": "",
-            "error": (
-                "9router not configured. Set NINEROUTER_BASE_URL and "
-                "NINEROUTER_API_KEY in ~/.hermes/.env."
-            ),
-            "provider": PROVIDER_NAME,
-        }
+class NineRouterTranscriptionProvider(TranscriptionProvider):
+    """Speech-to-text via the gateway's ``/v1/audio/transcriptions`` endpoint."""
 
-    resolved_model = _resolve_model(model)
-    cfg = _load_9router_stt_config()
-    data: Dict[str, Any] = {"model": resolved_model}
+    name = PROVIDER_NAME
+    display_name = PROVIDER_NAME
 
-    for key in ("language", "prompt", "response_format"):
-        value = cfg.get(key)
-        if isinstance(value, str) and value.strip():
-            data[key] = value.strip()
-    temperature = cfg.get("temperature")
-    if isinstance(temperature, (int, float)):
-        data["temperature"] = temperature
+    def is_available(self) -> bool:
+        return is_configured()
 
-    logger.info("9router STT: model=%s file=%s", resolved_model, file_path)
-    try:
-        response = post_form(
-            "/v1/audio/transcriptions",
-            data=data,
-            file_field="file",
-            file_path=file_path,
-            file_mime=_guess_mime(file_path),
-            timeout=300,
-        )
-    except ValueError as exc:  # missing env
-        return {
-            "success": False,
-            "transcript": "",
-            "error": str(exc),
-            "provider": PROVIDER_NAME,
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("9router STT error: %s", exc)
-        return {
-            "success": False,
-            "transcript": "",
-            "error": f"9router STT failed: {exc}",
-            "provider": PROVIDER_NAME,
-        }
-
-    text = ""
-    if isinstance(response, dict):
-        if isinstance(response.get("text"), str):
-            text = response["text"]
-        elif isinstance(response.get("_raw"), str):
-            text = response["_raw"]
-    elif isinstance(response, str):
-        text = response
-
-    return {
-        "success": True,
-        "transcript": text,
-        "provider": PROVIDER_NAME,
-        "model": resolved_model,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Monkey-patch installer
-# ---------------------------------------------------------------------------
-
-
-def install_stt_patch() -> None:
-    from tools import transcription_tools
-
-    if getattr(transcription_tools.transcribe_audio, "_9router_patched", False):
-        return
-
-    original = transcription_tools.transcribe_audio
-
-    def patched_transcribe_audio(
+    def transcribe(
+        self,
         file_path: str,
+        *,
         model: Optional[str] = None,
+        language: Optional[str] = None,
+        **extra: Any,
     ) -> Dict[str, Any]:
-        try:
-            stt_config = transcription_tools._load_stt_config()
-            provider = transcription_tools._get_provider(stt_config)
-        except Exception:  # noqa: BLE001
-            return original(file_path, model)
-
-        if provider != "9router":
-            return original(file_path, model)
-
-        # Validate the audio file via Hermes' own helper so the error
-        # shape matches what the rest of the codebase expects.
-        validation_error = transcription_tools._validate_audio_file(file_path)
-        if validation_error:
-            return validation_error
-
-        if not transcription_tools.is_stt_enabled(stt_config):
+        """Transcribe an audio file; returns the standard envelope, never raises."""
+        if not is_configured():
             return {
                 "success": False,
                 "transcript": "",
-                "error": "STT is disabled in config.yaml (stt.enabled: false).",
+                "error": (
+                    "NINEROUTER_BASE_URL is not set — configure the 9router "
+                    "gateway first (hermes 9router setup, or ~/.hermes/.env)."
+                ),
+                "provider": PROVIDER_NAME,
             }
 
-        return _transcribe_9router(file_path, model)
+        try:
+            cfg = load_hermes_config()
+            resolved = model or resolve_stt_model(cfg)
+            data = build_transcription_fields(resolved, language, cfg)
+            logger.info("9router STT: model=%s file=%s", resolved, file_path)
+            response = post_form(
+                "/v1/audio/transcriptions",
+                data=data,
+                file_field="file",
+                file_path=file_path,
+                file_mime=guess_mime(file_path),
+                timeout=300,
+            )
+        except Exception as exc:  # noqa: BLE001 — envelope contract, never raise
+            logger.warning("9router STT error: %s", exc)
+            return {
+                "success": False,
+                "transcript": "",
+                "error": f"9router STT failed: {exc}",
+                "provider": PROVIDER_NAME,
+            }
 
-    patched_transcribe_audio._9router_patched = True  # type: ignore[attr-defined]
-    transcription_tools.transcribe_audio = patched_transcribe_audio
+        text = ""
+        if isinstance(response, dict):
+            if isinstance(response.get("text"), str):
+                text = response["text"]
+            elif isinstance(response.get("_raw"), str):
+                text = response["_raw"]
+        elif isinstance(response, str):
+            text = response
+
+        return {
+            "success": True,
+            "transcript": text,
+            "provider": PROVIDER_NAME,
+            "model": resolved,
+        }
+
+    def list_models(self) -> List[Dict[str, Any]]:
+        try:
+            entries = fetch_catalog("stt")
+        except Exception as exc:  # unreachable gateway, bad key, junk payload…
+            logger.debug("9router STT catalog unavailable: %s", exc)
+            entries = []
+        if not entries:
+            return [
+                {"id": model_id, "display": model_id}
+                for model_id in STT_FALLBACK_MODELS
+            ]
+        return [
+            {
+                "id": entry.id,
+                "display": entry.id + (" (combo)" if entry.is_combo else ""),
+            }
+            for entry in entries
+        ]
+
+    def default_model(self) -> str:
+        return DEFAULT_STT_MODEL
+
+    def get_setup_schema(self) -> Dict[str, Any]:
+        return {
+            "name": PROVIDER_NAME,
+            "badge": "self-hosted",
+            "tag": "Self-hosted 9router gateway — proxies /v1/audio/transcriptions.",
+            "env_vars": [
+                {
+                    "key": "NINEROUTER_BASE_URL",
+                    "prompt": "9router gateway base URL (e.g. http://127.0.0.1:20128)",
+                },
+                {
+                    "key": "NINEROUTER_API_KEY",
+                    "prompt": "9router API key (optional — leave empty for keyless gateways)",
+                },
+            ],
+        }
