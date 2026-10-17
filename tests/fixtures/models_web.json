@@ -1,0 +1,10 @@
+{"object": "list", "data": [
+  {"id": "openclaw-search", "object": "model", "owned_by": "combo", "kind": "webSearch"},
+  {"id": "openclaw-fetch", "object": "model", "owned_by": "combo", "kind": "webFetch"},
+  {"id": "tavily/search", "object": "model", "kind": "webSearch", "owned_by": "tavily"},
+  {"id": "tavily/fetch", "object": "model", "kind": "webFetch", "owned_by": "tavily"},
+  {"id": "exa/search", "object": "model", "kind": "webSearch", "owned_by": "exa"},
+  {"id": "exa/fetch", "object": "model", "kind": "webFetch", "owned_by": "exa"},
+  {"id": "firecrawl/fetch", "object": "model", "kind": "webFetch", "owned_by": "firecrawl"},
+  {"id": "serper/search", "object": "model", "kind": "webSearch", "owned_by": "serper"}
+]}

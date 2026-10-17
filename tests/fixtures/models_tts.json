@@ -1,0 +1,9 @@
+{"object": "list", "data": [
+  {"id": "tts-combo", "object": "model", "owned_by": "combo", "kind": "tts"},
+  {"id": "gemini/gemini-3.1-flash-tts-preview", "object": "model", "owned_by": "gemini"},
+  {"id": "openai/tts-1", "object": "model", "owned_by": "openai"},
+  {"id": "openai/gpt-4o-mini-tts", "object": "model", "owned_by": "openai"},
+  {"id": "nvidia/fastpitch", "object": "model", "owned_by": "nvidia"},
+  {"id": "openrouter/openai/tts-1", "object": "model", "owned_by": "openrouter"},
+  {"id": "openrouter/fish-audio/s2.1-pro-free:free", "object": "model", "owned_by": "openrouter"}
+]}

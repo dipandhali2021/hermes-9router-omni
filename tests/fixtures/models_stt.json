@@ -1,0 +1,9 @@
+{"object": "list", "data": [
+  {"id": "stt-combo", "object": "model", "owned_by": "combo", "kind": "stt"},
+  {"id": "gemini/gemini-2.5-pro", "object": "model", "owned_by": "gemini"},
+  {"id": "groq/whisper-large-v3-turbo", "object": "model", "owned_by": "groq"},
+  {"id": "dg/nova-3", "object": "model", "owned_by": "dg"},
+  {"id": "openai/whisper-1", "object": "model", "owned_by": "openai"},
+  {"id": "openai/gpt-4o-transcribe", "object": "model", "owned_by": "openai"},
+  {"id": "el/scribe_v2", "object": "model", "owned_by": "elevenlabs"}
+]}
