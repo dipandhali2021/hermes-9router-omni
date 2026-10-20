@@ -1,10 +1,13 @@
 ## 9router-omni installed
 
-Next: pick models from your gateway's live catalog:
+First enable automatically routes web search, web extract, TTS, STT, and
+image generation through 9router using sensible defaults.
+
+To choose different models or a voice, run:
 
     hermes 9router setup
 
-The wizard configures web search, web extract, TTS, STT, and image
-generation. Re-run it any time to change models or disable a capability.
+The wizard is re-runnable any time; it also lets you disable a capability.
+Your later changes are not overwritten by the first-install defaults.
 
 Keyless gateways are supported — leave `NINEROUTER_API_KEY` empty.

@@ -8,7 +8,7 @@ inside functions.
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .catalog import (
     CatalogEntry,
@@ -200,6 +200,30 @@ def plan_writes(
             del image["provider"]
 
     return out
+
+
+def first_install_plan(
+    cfg: Any, capabilities: Optional[Iterable[str]] = None
+) -> Dict[str, Any]:
+    """Config that routes every supported capability through 9router.
+
+    ``capabilities`` defaults to all five; pass the subset the running Hermes
+    can actually register (older versions lack the native TTS/STT hooks).
+    Existing model choices are preserved, matching the wizard's ``--yes`` path.
+    """
+    selected = set(capabilities) if capabilities is not None else set(CAPABILITY_LABELS)
+    decisions = {
+        capability: (True if capability in selected else None)
+        for capability in CAPABILITY_LABELS
+    }
+    models = {
+        "web_search": resolve_search_model(cfg),
+        "web_fetch": resolve_fetch_model(cfg),
+        "tts": resolve_tts_model(cfg),
+        "stt": resolve_stt_model(cfg),
+        "image": resolve_image_model(cfg),
+    }
+    return plan_writes(cfg, decisions, models=models)
 
 
 def fetch_capability_models(capability: str) -> List[CatalogEntry]:

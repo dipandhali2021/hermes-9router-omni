@@ -127,3 +127,45 @@ def test_plan_never_writes_voice_with_combo_model():
         {"web_search": False, "web_fetch": False, "tts": True, "stt": False, "image": False},
         models={"tts": "tts-combo"}, voice="nova")
     assert out["tts"] == {"provider": "9router", "model": "tts-combo"}
+
+
+def test_first_install_plan_enables_all_five_capabilities():
+    out = wizard.first_install_plan({})
+    assert out["web"] == {
+        "search_backend": "9router",
+        "extract_backend": "9router",
+        "9router": {
+            "search_model": "openclaw-search",
+            "fetch_model": "openclaw-fetch",
+        },
+    }
+    assert out["tts"] == {
+        "provider": "9router",
+        "model": "openrouter/fish-audio/s2.1-pro-free:free",
+    }
+    assert out["stt"] == {
+        "provider": "9router",
+        "enabled": True,
+        "9router": {"model": "groq/whisper-large-v3-turbo"},
+    }
+    assert out["image_gen"] == {
+        "provider": "9router",
+        "model": "ag/gemini-3.1-flash-image",
+    }
+
+
+def test_first_install_plan_keeps_existing_models():
+    out = wizard.first_install_plan(
+        {"tts": {"model": "openai/tts-1"}, "image_gen": {"model": "custom/image"}}
+    )
+    assert out["tts"]["model"] == "openai/tts-1"
+    assert out["image_gen"]["model"] == "custom/image"
+
+
+def test_first_install_plan_leaves_unsupported_capabilities_untouched():
+    cfg = {"stt": {"provider": "local"}, "tts": {"provider": "edge"}}
+    out = wizard.first_install_plan(
+        cfg, capabilities={"web_search", "web_fetch", "image"}
+    )
+    assert out["stt"] == {"provider": "local"}
+    assert out["tts"] == {"provider": "edge"}

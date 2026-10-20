@@ -5,8 +5,9 @@ tool calls through a single 9router gateway using Hermes v0.17+ native provider
 hooks (``register_web_search_provider``, ``register_image_gen_provider``,
 ``register_tts_provider``, ``register_transcription_provider``).
 
-Model selection: run ``hermes 9router setup`` — a wizard over the gateway's
-live per-modality catalogs (picks models, voice, and the capabilities to route).
+First enable automatically routes all five capabilities through 9router with
+the default models. Run ``hermes 9router setup`` to pick models/voice from the
+gateway's live per-modality catalogs or to disable a capability.
 
 Env vars:
     NINEROUTER_BASE_URL    required, e.g. ``http://127.0.0.1:20128``
@@ -16,14 +17,65 @@ Env vars:
 from __future__ import annotations
 
 import logging
+from typing import Iterable, Optional
 
-from . import setup_cmd
+from . import _http, setup_cmd
 from .image_gen import NineRouterImageGenProvider
 from .stt import NineRouterTranscriptionProvider
 from .tts import NineRouterTTSProvider
 from .web import NineRouterWebSearchProvider
 
 logger = logging.getLogger(__name__)
+
+_FIRST_INSTALL_STATE_KEY = "first_install_setup_complete"
+
+
+def _auto_configure_first_install(
+    ctx, capabilities: Optional[Iterable[str]] = None
+) -> None:
+    """One-time setup: force every supported capability through 9router.
+
+    The marker lives in Hermes' durable plugin state, so the force happens on
+    the first load only; later manual changes (including disabling a
+    capability) are never overwritten. If the gateway is not configured yet,
+    leave the marker unset and try again on a later load — the install flow
+    normally sets ``NINEROUTER_BASE_URL`` first.
+    """
+    state = getattr(ctx, "state", None)
+    if state is None:
+        return
+    try:
+        if state.get(_FIRST_INSTALL_STATE_KEY):
+            return
+    except Exception as exc:  # noqa: BLE001 — plugin load must never fail here
+        logger.warning("9router: could not read first-install marker (%s)", exc)
+        return
+
+    try:
+        from hermes_cli.config import load_config, save_config
+
+        cfg = load_config()
+        if not _http.is_configured():
+            logger.info(
+                "9router: first-install setup deferred until NINEROUTER_BASE_URL "
+                "or a 9router provider is configured"
+            )
+            return
+        save_config(setup_cmd.first_install_plan(cfg, capabilities=capabilities))
+    except Exception as exc:  # noqa: BLE001 — a config failure must not break plugin load
+        logger.warning(
+            "9router: first-install auto-config failed (%s); "
+            "run `hermes 9router setup`",
+            exc,
+        )
+        return
+
+    try:
+        state.set(_FIRST_INSTALL_STATE_KEY, True)
+    except Exception as exc:  # noqa: BLE001 — the config is already saved
+        logger.warning("9router: could not record first-install marker (%s)", exc)
+        return
+    logger.info("9router: first install routed all supported capabilities through 9router")
 
 
 def _patch_web_tools_gating() -> None:
@@ -89,10 +141,12 @@ def register(ctx) -> None:
     ctx.register_web_search_provider(NineRouterWebSearchProvider())
     ctx.register_image_gen_provider(NineRouterImageGenProvider())
 
+    native_tts_stt = True
     try:
         ctx.register_tts_provider(NineRouterTTSProvider())
         ctx.register_transcription_provider(NineRouterTranscriptionProvider())
     except AttributeError:
+        native_tts_stt = False
         logger.warning(
             "Hermes v0.17.0+ is required for native TTS/STT providers; "
             "web search and image generation remain active."
@@ -113,3 +167,8 @@ def register(ctx) -> None:
         setup_fn=setup_cmd.register_subcommand,
         handler_fn=setup_cmd.handle_setup,
     )
+
+    capabilities = ["web_search", "web_fetch", "image"]
+    if native_tts_stt:
+        capabilities += ["tts", "stt"]
+    _auto_configure_first_install(ctx, capabilities)

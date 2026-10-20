@@ -1,5 +1,5 @@
 name: 9router-omni
-version: 3.0.1
+version: 3.1.0
 description: "Route web search, web extract, image generation, TTS, and STT through a 9router gateway."
 author: dipandhali2021
 kind: backend

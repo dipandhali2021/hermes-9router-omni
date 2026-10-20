@@ -34,7 +34,11 @@ The install prompts for env vars (values already set are skipped):
 - `NINEROUTER_BASE_URL` — required, e.g. `http://127.0.0.1:20128`
 - `NINEROUTER_API_KEY` — optional; leave empty for keyless gateways
 
-Then run the setup wizard:
+On first enable, the plugin automatically routes **all five capabilities** through
+9router using the defaults below and records a one-time marker in Hermes' plugin
+state. Later manual changes — including disabling a capability — are left alone.
+
+Run the setup wizard when you want to choose different models or a voice:
 
 ```bash
 hermes 9router setup
@@ -135,8 +139,10 @@ Defaults used when nothing is configured (or a catalog is unreachable):
 ## Upgrading from v2
 
 v3.0.0 replaces the TTS/STT monkey-patches with native providers, keeps reading
-old model keys, and manages configuration through the wizard. After upgrading,
-run `hermes 9router setup` once.
+old model keys, and manages configuration through the wizard. Upgrading to
+v3.1.0 force-enables all five capabilities once on the first load, using any
+existing model choices. Run `hermes 9router setup` afterward if you want
+different models or want to disable a capability.
 
 ## Development
 
