@@ -10,6 +10,7 @@ class FakeState(dict):
 class FakeCtx:
     def __init__(self, native_hooks=True, state=None):
         self.web, self.image, self.tts, self.stt, self.cli = [], [], [], [], []
+        self.hooks, self.tools, self.prompt_sections = [], [], []
         self.state = state
         if native_hooks:
             self.register_tts_provider = self.tts.append
@@ -23,6 +24,59 @@ class FakeCtx:
 
     def register_cli_command(self, name, help, setup_fn, handler_fn=None, description=""):
         self.cli.append((name, setup_fn, handler_fn))
+
+    def register_hook(self, name, callback):
+        self.hooks.append((name, callback))
+
+    def register_tool(self, **kwargs):
+        self.tools.append(kwargs)
+
+    def register_system_prompt_section(self, id, content, **kwargs):
+        self.prompt_sections.append((id, content))
+
+
+def test_web_gate_accepts_search_and_extract_backend_pins(plugin_pkg):
+    for key in ("search_backend", "extract_backend"):
+        assert plugin_pkg._web_gate_is_available(
+            load_web_config=lambda key=key: {key: "9router"},
+            is_available=lambda name: name == "9router",
+            original_check=lambda: False,
+        ) is True
+
+
+def test_web_gate_preserves_native_availability_check(plugin_pkg):
+    assert plugin_pkg._web_gate_is_available(
+        load_web_config=lambda: {},
+        is_available=lambda name: False,
+        original_check=lambda: True,
+    ) is True
+
+
+def test_web_gate_falls_back_to_registered_provider(plugin_pkg):
+    assert plugin_pkg._web_gate_is_available(
+        load_web_config=lambda: {},
+        is_available=lambda name: name == "9router",
+        original_check=lambda: False,
+        registered_provider_names=["9router"],
+    ) is True
+
+
+def test_web_gate_is_false_when_nothing_is_available(plugin_pkg):
+    assert plugin_pkg._web_gate_is_available(
+        load_web_config=lambda: {"search_backend": "9router"},
+        is_available=lambda name: False,
+        original_check=lambda: False,
+    ) is False
+
+
+def test_register_audio_bridge(plugin_pkg):
+    ctx = FakeCtx()
+    plugin_pkg._register_audio_bridge(ctx)
+
+    assert [tool["name"] for tool in ctx.tools] == ["transcribe_audio"]
+    assert ctx.tools[0]["toolset"] == "file"
+    assert ctx.hooks and ctx.hooks[0][0] == "pre_llm_call"
+    assert ctx.prompt_sections and ctx.prompt_sections[0][0] == "9router-audio"
 
 
 def test_register_all_providers_and_cli(plugin_pkg, monkeypatch):

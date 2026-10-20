@@ -38,6 +38,12 @@ On first enable, the plugin automatically routes **all five capabilities** throu
 9router using the defaults below and records a one-time marker in Hermes' plugin
 state. Later manual changes — including disabling a capability — are left alone.
 
+STT also covers audio files dropped into the interactive TUI. A `pre_llm_call`
+hook detects `[User attached file: ...]`, transcribes the audio through 9router,
+and injects the transcript before the model runs. The `transcribe_audio` tool
+is available as a manual fallback. Restart the TUI after installing or updating
+the plugin so its hooks load.
+
 Run the setup wizard when you want to choose different models or a voice:
 
 ```bash
@@ -90,7 +96,8 @@ Then ask the agent, for example:
 
 - "search the web for the 9router changelog" (web search)
 - "generate an image of a sunset over a router rack" (image generation)
-- `/tts hello` (TTS), or send a voice clip via Telegram/Discord (STT)
+- `/tts hello` (TTS), or drop a voice clip into the TUI / send one via
+  Telegram or Discord (STT)
 
 ## Models
 
@@ -130,6 +137,15 @@ Defaults used when nothing is configured (or a catalog is unreachable):
   (`openai/tts-1` + `nova` → `openai/tts-1/nova`); combo models take no voice
   suffix. The wizard skips the voice prompt for combos — clear `tts.voice` if
   you hand-edited a combo + voice config.
+- **`web_search` / `web_extract` missing from the TUI.** v3.2.0 checks
+  `web.backend`, `web.search_backend`, and `web.extract_backend`. Restart the
+  TUI after upgrading; `hermes 9router setup` writes the two per-capability
+  keys.
+- **TUI voice note tries local Whisper/Vosk.** v3.2.0 auto-transcribes audio
+  attachments through 9router. Restart the TUI, confirm
+  `stt.provider: 9router`, and check the gateway credentials. If a long
+  recording exceeds the 30-second hook limit, ask the agent to use the
+  `transcribe_audio` tool.
 - **TTS/STT missing on older Hermes.** Native TTS/STT registration requires
   Hermes v0.17.0+; the plugin logs a warning and keeps web search + image
   generation active.
@@ -141,7 +157,9 @@ Defaults used when nothing is configured (or a catalog is unreachable):
 v3.0.0 replaces the TTS/STT monkey-patches with native providers, keeps reading
 old model keys, and manages configuration through the wizard. Upgrading to
 v3.1.0 force-enables all five capabilities once on the first load, using any
-existing model choices. Run `hermes 9router setup` afterward if you want
+existing model choices. v3.2.0 fixes web-tool gating for per-capability backend
+keys and adds automatic TUI audio attachment transcription; restart the TUI
+(and gateway) after updating. Run `hermes 9router setup` afterward if you want
 different models or want to disable a capability.
 
 ## Development
@@ -170,7 +188,8 @@ NINEROUTER_LIVE=1 NINEROUTER_BASE_URL=http://127.0.0.1:20128 \
 ├── web.py           # NineRouterWebSearchProvider
 ├── image_gen.py     # NineRouterImageGenProvider
 ├── tts.py           # NineRouterTTSProvider
-├── stt.py           # NineRouterTranscriptionProvider
+├── stt.py            # NineRouterTranscriptionProvider
+├── attachment_stt.py # TUI audio hook + transcribe_audio tool
 ├── setup_cmd.py     # `hermes 9router setup` wizard
 ├── LICENSE
 └── README.md

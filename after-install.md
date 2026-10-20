@@ -3,6 +3,10 @@
 First enable automatically routes web search, web extract, TTS, STT, and
 image generation through 9router using sensible defaults.
 
+STT also handles audio files dropped into the interactive TUI: the plugin
+transcribes them through 9router before the model sees the turn. Restart the
+TUI after install/update so the attachment hook loads.
+
 To choose different models or a voice, run:
 
     hermes 9router setup

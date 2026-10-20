@@ -78,15 +78,54 @@ def _auto_configure_first_install(
     logger.info("9router: first install routed all supported capabilities through 9router")
 
 
+def _web_gate_is_available(
+    *,
+    load_web_config,
+    is_available,
+    original_check=None,
+    registered_provider_names=(),
+) -> bool:
+    """Shared decision for the web_search/web_extract ``check_fn``.
+
+    Preserve Hermes' native availability result first (newer releases already
+    understand plugin providers), then fall back to every per-capability
+    backend pin and finally to the registered provider objects. The old patch
+    only looked at ``web.backend``, so a config using ``web.search_backend`` /
+    ``web.extract_backend`` hid both tools from the model.
+    """
+    if original_check is not None:
+        try:
+            if original_check():
+                return True
+        except Exception:  # noqa: BLE001 — fall through to the explicit checks
+            pass
+
+    try:
+        cfg = load_web_config() or {}
+    except Exception:  # noqa: BLE001 — gating must never raise
+        cfg = {}
+
+    for key in ("backend", "search_backend", "extract_backend"):
+        backend = str(cfg.get(key) or "").lower().strip()
+        if backend and is_available(backend):
+            return True
+
+    for name in registered_provider_names:
+        backend = str(name or "").lower().strip()
+        if backend and is_available(backend):
+            return True
+
+    return False
+
+
 def _patch_web_tools_gating() -> None:
     """Teach ``tools.web_tools`` that ``9router`` (or any registered
     third-party provider) counts as an available backend.
 
-    Why: ``check_web_api_key`` is the ``check_fn`` on the ``web_search`` /
-    ``web_extract`` tool registrations. It and its helper
-    ``_is_backend_available`` both hardcode the seven built-in providers, so
-    any third-party backend registered via ``ctx.register_web_search_provider()``
-    is reported as unavailable and the tools are hidden from the model. We
+    Why: older Hermes releases had ``check_web_api_key`` and
+    ``_is_backend_available`` hardcode the seven built-in providers, so any
+    third-party backend registered via ``ctx.register_web_search_provider()``
+    was reported as unavailable and the tools were hidden from the model. We
     wrap both so any registered provider that reports ``is_available()`` counts.
     """
     from tools import web_tools
@@ -114,11 +153,16 @@ def _patch_web_tools_gating() -> None:
     original_check_web_api_key = web_tools.check_web_api_key
 
     def patched_check_web_api_key() -> bool:
-        configured = (web_tools._load_web_config().get("backend") or "").lower().strip()
-        if configured:
-            return patched_is_available(configured)
-        builtins = ("exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs")
-        return any(patched_is_available(b) for b in builtins)
+        try:
+            registered = [p.name for p in web_tools._list_registered_web_providers()]
+        except Exception:
+            registered = []
+        return _web_gate_is_available(
+            load_web_config=web_tools._load_web_config,
+            is_available=patched_is_available,
+            original_check=original_check_web_api_key,
+            registered_provider_names=registered,
+        )
 
     web_tools.check_web_api_key = patched_check_web_api_key
 
@@ -134,6 +178,50 @@ def _patch_web_tools_gating() -> None:
         if entry is not None and getattr(entry, "check_fn", None) is original_check_web_api_key:
             entry.check_fn = patched_check_web_api_key
     invalidate_check_fn_cache()
+
+
+def _register_audio_bridge(ctx) -> None:
+    """Bridge TUI/CLI audio attachments to the registered 9router STT provider.
+
+    Hermes' native transcription dispatch covers gateway voice messages and
+    voice mode, not files dropped into the interactive TUI. Without this bridge
+    the model sees only ``[User attached file: /path.m4a]`` and tends to install
+    local Whisper/Vosk instead of using the plugin.
+    """
+    try:
+        from . import attachment_stt
+    except Exception as exc:  # noqa: BLE001 — never break plugin load
+        logger.warning("9router: audio attachment bridge unavailable (%s)", exc)
+        return
+
+    register_tool = getattr(ctx, "register_tool", None)
+    if callable(register_tool):
+        try:
+            register_tool(
+                name="transcribe_audio",
+                toolset="file",
+                schema=attachment_stt.TRANSCRIBE_AUDIO_SCHEMA,
+                handler=attachment_stt.handle_transcribe_audio,
+                check_fn=_http.is_configured,
+                description="Transcribe an audio file through 9router STT.",
+                emoji="🎙️",
+            )
+        except Exception as exc:  # noqa: BLE001 — older Hermes may not allow plugin tools
+            logger.warning("9router: could not register transcribe_audio tool (%s)", exc)
+
+    register_hook = getattr(ctx, "register_hook", None)
+    if callable(register_hook):
+        try:
+            register_hook("pre_llm_call", attachment_stt.auto_transcribe_attachment)
+        except Exception as exc:  # noqa: BLE001 — keep the rest of the plugin active
+            logger.warning("9router: could not register audio attachment hook (%s)", exc)
+
+    register_section = getattr(ctx, "register_system_prompt_section", None)
+    if callable(register_section):
+        try:
+            register_section("9router-audio", attachment_stt.AUDIO_TOOL_HINT)
+        except Exception as exc:  # noqa: BLE001 — optional nicety
+            logger.debug("9router: could not register audio prompt section (%s)", exc)
 
 
 def register(ctx) -> None:
@@ -160,6 +248,9 @@ def register(ctx) -> None:
             "may report as unavailable until Hermes updates. Plugin load continues.",
             exc,
         )
+
+    if native_tts_stt:
+        _register_audio_bridge(ctx)
 
     ctx.register_cli_command(
         name="9router",
