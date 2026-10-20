@@ -13,7 +13,7 @@ under ``image_gen.9router``:
 
     image_gen:
       provider: 9router
-      model: "image-combo"        # default; gateway auto-fallback combo
+      model: "ag/gemini-3.1-flash-image"  # default
       9router:
         quality: "high"           # optional, passed through
 """
@@ -41,14 +41,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = DEFAULT_IMAGE_MODEL
 
 CURATED_MODELS = (
-    "image-combo",
+    DEFAULT_MODEL,
     "gemini/gemini-3.1-flash-image-preview",
     "gemini/gemini-3-pro-image-preview",
     "nb/nanobanana-flash",
 )
 
 _CURATED_DISPLAYS = {
-    "image-combo": "9router image combo (default)",
+    DEFAULT_MODEL: "AG Gemini 3.1 Flash Image (default)",
     "gemini/gemini-3.1-flash-image-preview": "Gemini 3.1 Flash Image (preview)",
     "gemini/gemini-3-pro-image-preview": "Gemini 3 Pro Image (preview)",
     "nb/nanobanana-flash": "Nanobanana Flash",

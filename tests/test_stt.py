@@ -41,7 +41,7 @@ def test_transcribe_carries_config_fields(monkeypatch, tmp_path):
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"RIFF")
     _provider().transcribe(str(audio))
-    assert captured["data"]["model"] == "stt-combo"
+    assert captured["data"]["model"] == "groq/whisper-large-v3-turbo"
     assert captured["data"]["prompt"] == "ctx"
     assert captured["data"]["language"] == "en"
 
@@ -74,8 +74,8 @@ def test_list_models_fallback_and_default(monkeypatch):
 
     monkeypatch.setattr("ninerouter_omni.stt.fetch_catalog", boom)
     p = _provider()
-    assert p.default_model() == "stt-combo"
-    assert [m["id"] for m in p.list_models()][0] == "stt-combo"
+    assert p.default_model() == "groq/whisper-large-v3-turbo"
+    assert [m["id"] for m in p.list_models()][0] == "groq/whisper-large-v3-turbo"
 
 
 def test_guess_mime(tmp_path):

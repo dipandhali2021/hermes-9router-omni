@@ -26,7 +26,11 @@ from .settings import (
 
 logger = logging.getLogger(__name__)
 
-TTS_FALLBACK_MODELS = ("tts-combo", "openai/tts-1", "openai/gpt-4o-mini-tts")
+TTS_FALLBACK_MODELS = (
+    DEFAULT_TTS_MODEL,
+    "openrouter/openai/tts-1",
+    "openrouter/openai/gpt-4o-mini-tts",
+)
 
 
 class NineRouterTTSProvider(TTSProvider):

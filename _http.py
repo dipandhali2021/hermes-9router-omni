@@ -5,10 +5,17 @@ All four capability modules (web, image_gen, tts, stt) import from here.
 Env vars:
     NINEROUTER_BASE_URL    Base URL of the 9router gateway, e.g.
                            ``http://127.0.0.1:20128`` for a local install.
-                           Required.
-    NINEROUTER_API_KEY     Bearer token for the gateway. Optional — leave
-                           unset (or empty) for keyless gateways; requests
-                           then omit the Authorization header.
+    NINEROUTER_API_KEY     Bearer token for the gateway. Optional for
+                           keyless gateways; requests then omit the
+                           Authorization header.
+
+When either variable is unset, the gateway URL/key configured under
+``providers.9router`` or a ``custom_providers`` entry named ``9router*`` in
+``~/.hermes/config.yaml`` is used instead. 9router's ``/v1`` routes require a
+key for remote access (and whenever ``settings.requireApiKey`` is on), so
+this fallback prevents an otherwise-discovered gateway from returning 401.
+An explicitly empty env value (``NINEROUTER_API_KEY=``) means keyless and is
+never overridden by config.
 """
 
 from __future__ import annotations
@@ -17,29 +24,76 @@ import logging
 import os
 from typing import Any, BinaryIO, Dict, Mapping, Optional, Tuple
 
+from .settings import (
+    load_hermes_config,
+    resolve_gateway_credentials,
+)
+
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_S = 60
 
 
+def _env(name: str) -> Optional[str]:
+    """Env value (stripped), or ``None`` when the variable is unset.
+
+    An explicitly empty value stays empty — ``NINEROUTER_API_KEY=`` is the
+    user asking for keyless mode, not a request to fall back to config.
+    """
+    if name not in os.environ:
+        return None
+    return os.environ[name].strip()
+
+
+def _resolved_credentials() -> Tuple[str, str]:
+    """Resolve gateway URL + key: env vars first, then Hermes config.
+
+    Users usually configure 9router once as a model provider (including a
+    valid key). Without this fallback the plugin reads only the process
+    environment, sends no ``Authorization`` header, and 9router answers
+    STT/TTS/web/image requests with 401.
+    """
+    env_base = _env("NINEROUTER_BASE_URL")
+    env_key = _env("NINEROUTER_API_KEY")
+    if env_base is not None and env_key is not None:
+        return env_base, env_key
+
+    try:
+        cfg = load_hermes_config()
+        cfg_base, cfg_key = resolve_gateway_credentials(cfg, base_url_hint=env_base)
+    except Exception:  # noqa: BLE001 — config lookup must never break requests
+        logger.debug("9router: could not read Hermes provider config", exc_info=True)
+        cfg_base, cfg_key = None, ""
+
+    base = env_base if env_base is not None else (cfg_base or "")
+    key = env_key if env_key is not None else (cfg_key or "")
+    return base, key
+
+
 def base_url() -> str:
-    raw = os.getenv("NINEROUTER_BASE_URL", "").strip()
+    raw = _resolved_credentials()[0]
     if not raw:
         raise ValueError(
-            "NINEROUTER_BASE_URL environment variable not set. "
-            "Set it to your 9router gateway URL (e.g. http://127.0.0.1:20128)."
+            "NINEROUTER_BASE_URL environment variable not set. Set it to your "
+            "9router gateway URL (e.g. http://127.0.0.1:20128), or configure "
+            "9router as a Hermes provider."
         )
-    return raw.rstrip("/")
+    raw = raw.rstrip("/")
+    # Hermes provider configs usually include the OpenAI-compatible ``/v1``
+    # suffix; the plugin's paths already start with it.
+    if raw.lower().endswith("/v1"):
+        raw = raw[:-3].rstrip("/")
+    return raw
 
 
 def api_key() -> str:
     """Bearer token, or ``""`` for keyless gateways. Never raises."""
-    return os.getenv("NINEROUTER_API_KEY", "").strip()
+    return _resolved_credentials()[1]
 
 
 def is_configured() -> bool:
-    """True when a base URL is set; the API key is optional."""
-    return bool(os.getenv("NINEROUTER_BASE_URL", "").strip())
+    """True when a gateway base URL is available; the API key is optional."""
+    return bool(_resolved_credentials()[0])
 
 
 def get_json(path: str, *, timeout: int = 15) -> Any:
@@ -73,9 +127,16 @@ def _raise_for_status(response, path: str) -> None:
         except Exception:
             text = ""
         preview = (text or "")[:200].replace("\n", " ")
+        hint = ""
+        if response.status_code in (401, 403):
+            hint = (
+                " — 9router requires an API key for /v1 access. Set "
+                "NINEROUTER_API_KEY, or configure 9router (with api_key) as a "
+                "Hermes provider so the plugin can reuse it."
+            )
         raise RuntimeError(
             f"9router {path} failed: {response.status_code} "
-            f"{getattr(response, 'reason_phrase', '')} :: {preview}"
+            f"{getattr(response, 'reason_phrase', '')} :: {preview}{hint}"
         )
 
 

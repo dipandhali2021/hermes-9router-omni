@@ -11,7 +11,7 @@ def test_metadata():
     p = _provider()
     assert p.name == "9router" and p.display_name == "9router"
     assert p.voice_compatible is False
-    assert p.default_model() == "tts-combo"
+    assert p.default_model() == "openrouter/fish-audio/s2.1-pro-free:free"
 
 
 def test_is_available_tracks_base_url(monkeypatch):
@@ -82,4 +82,4 @@ def test_list_models_live_and_fallback(monkeypatch):
         raise RuntimeError("gateway down")
 
     monkeypatch.setattr("ninerouter_omni.tts.fetch_catalog", boom)
-    assert [m["id"] for m in _provider().list_models()][0] == "tts-combo"
+    assert [m["id"] for m in _provider().list_models()][0] == "openrouter/fish-audio/s2.1-pro-free:free"

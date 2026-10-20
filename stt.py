@@ -30,7 +30,11 @@ from .settings import (
 
 logger = logging.getLogger(__name__)
 
-STT_FALLBACK_MODELS = ("stt-combo", "groq/whisper-large-v3-turbo", "openai/gpt-4o-transcribe")
+STT_FALLBACK_MODELS = (
+    DEFAULT_STT_MODEL,
+    "groq/whisper-large-v3",
+    "openai/gpt-4o-transcribe",
+)
 
 _AUDIO_MIME_OVERRIDES = {
     ".mp3": "audio/mpeg",

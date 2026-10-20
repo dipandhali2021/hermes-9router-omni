@@ -19,7 +19,8 @@ all five capabilities wired up.
 - Hermes Agent **v0.17.0+** for the native TTS/STT provider hooks. On older
   versions the plugin still registers web search and image generation (with a
   warning in the log).
-- A reachable 9router gateway. Keyless gateways are supported.
+- A reachable 9router gateway. Keyless gateways are supported only when the
+  gateway has `requireApiKey` disabled; remote `/v1` access always needs a key.
 
 ## Install
 
@@ -60,9 +61,9 @@ Keys it writes:
 |-------------|----------------------------------------------------------------------|---------------------------------------------------------------------|
 | Web search  | `web.search_backend: "9router"`, `web.9router.search_model`          | `web.search_backend` → `web.backend` → `openclaw-search`            |
 | Web fetch   | `web.extract_backend: "9router"`, `web.9router.fetch_model`          | `web.extract_backend` → `web.backend` → `openclaw-fetch`            |
-| TTS         | `tts.provider: "9router"`, `tts.model`, (`tts.voice` if given)       | dispatcher model → `tts.model` → `tts.9router.model` → `tts-combo`  |
-| STT         | `stt.provider: "9router"`, `stt.enabled: true`, `stt.9router.model`  | dispatcher model → `stt.9router.model` → `stt-combo`                |
-| Image       | `image_gen.provider: "9router"`, `image_gen.model`                   | `image_gen.model` → `image_gen.9router.model` → `image-combo`       |
+| TTS         | `tts.provider: "9router"`, `tts.model`, (`tts.voice` if given)       | dispatcher model → `tts.model` → `tts.9router.model` → `openrouter/fish-audio/s2.1-pro-free:free` |
+| STT         | `stt.provider: "9router"`, `stt.enabled: true`, `stt.9router.model`  | dispatcher model → `stt.9router.model` → `groq/whisper-large-v3-turbo` |
+| Image       | `image_gen.provider: "9router"`, `image_gen.model`                   | `image_gen.model` → `image_gen.9router.model` → `ag/gemini-3.1-flash-image` |
 
 **Re-running:** the wizard mirrors your current config. Unchecking a capability
 **disables 9router for that capability only** — it never deletes another
@@ -103,9 +104,9 @@ Defaults used when nothing is configured (or a catalog is unreachable):
 |-------------|-----------------------------------------|
 | Web search  | `openclaw-search` (combo)               |
 | Web fetch   | `openclaw-fetch` (combo)                |
-| TTS         | `tts-combo`                             |
-| STT         | `stt-combo`                             |
-| Image       | `image-combo`                           |
+| TTS         | `openrouter/fish-audio/s2.1-pro-free:free` |
+| STT         | `groq/whisper-large-v3-turbo`           |
+| Image       | `ag/gemini-3.1-flash-image`             |
 
 ## Troubleshooting
 
@@ -115,6 +116,12 @@ Defaults used when nothing is configured (or a catalog is unreachable):
 - **401/403 during setup.** `NINEROUTER_API_KEY` is wrong — or required and
   unset. A 400 on the auth probe is *success* (the probe intentionally omits
   the `input` field).
+- **401 `API key required for remote API access` on STT / voice messages.**
+  9router received no `Authorization` header. Set `NINEROUTER_API_KEY`, or
+  configure 9router as a Hermes provider (`providers.9router.api_key`, or a
+  `custom_providers` entry named `9router*`) — the plugin reuses that key
+  automatically. An explicitly empty `NINEROUTER_API_KEY=` disables the
+  fallback for keyless gateways.
 - **`combo + voice` rejected.** Voice is composed into the model id
   (`openai/tts-1` + `nova` → `openai/tts-1/nova`); combo models take no voice
   suffix. The wizard skips the voice prompt for combos — clear `tts.voice` if

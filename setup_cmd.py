@@ -249,7 +249,7 @@ def register_subcommand(parser: Any) -> None:
     )
     sp.add_argument("--tts-model", default=None, help="TTS model id (e.g. openai/tts-1)")
     sp.add_argument("--stt-model", default=None, help="STT model id (e.g. groq/whisper-large-v3-turbo)")
-    sp.add_argument("--image-model", default=None, help="Image model id (e.g. image-combo)")
+    sp.add_argument("--image-model", default=None, help="Image model id (e.g. ag/gemini-3.1-flash-image)")
     sp.add_argument("--search-model", default=None, help="Web search model id (e.g. tavily/search)")
     sp.add_argument("--fetch-model", default=None, help="Web fetch model id (e.g. exa/fetch)")
     sp.add_argument("--voice", default=None, help="TTS voice (free text, e.g. nova)")

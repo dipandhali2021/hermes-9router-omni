@@ -109,7 +109,8 @@ def test_scripted_plan_flags_then_current_then_defaults():
     decisions, models, voice = wizard.build_scripted_plan({"tts": {"model": "openai/tts-1"}}, args)
     assert all(decisions.values())
     assert models == {"web_search": "openclaw-search", "web_fetch": "openclaw-fetch",
-                      "tts": "openai/tts-1", "stt": "stt-x", "image": "image-combo"}
+                      "tts": "openai/tts-1", "stt": "stt-x",
+                      "image": "ag/gemini-3.1-flash-image"}
     assert voice == "nova"
 
 

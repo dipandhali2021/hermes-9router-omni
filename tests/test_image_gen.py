@@ -5,13 +5,13 @@ def _provider():
     return image_gen.NineRouterImageGenProvider()
 
 
-def test_default_model_is_combo():
-    assert _provider().default_model() == "image-combo"
+def test_default_model_is_flash_image():
+    assert _provider().default_model() == "ag/gemini-3.1-flash-image"
 
 
 def test_list_models_is_curated_not_a_dump():
     ids = [m["id"] for m in _provider().list_models()]
-    assert ids[0] == "image-combo"
+    assert ids[0] == "ag/gemini-3.1-flash-image"
     assert len(ids) <= len(image_gen.CURATED_MODELS) + 1
 
 
